@@ -69,18 +69,17 @@ if __name__=="__main__":
 
 	# Region selection
 	if args.f_region is not None:
-		df_region = pd.read_csv(args.f_region, sep="\t")
-		print(df_region)
+		df_region = pd.read_csv(args.f_region, sep=",")
 	else:
 		f_region = download("unmethyl_regions")
 		df_region = pd.read_csv(f_region, sep="\t")
-		unique_ctypes = df_files["cell_type"].unique()
-		df_region = df_region.loc[df_region["Type"].apply(lambda x: x in unique_ctypes), :]
-		df_region["dmr_id"] = list(range(df_region.shape[0]))
-		df_region.rename(columns={"Type":"ctype"}, inplace=True)
-		print(df_region)
-		unique_ctypes=df_region["ctype"].unique()
-		print(f"Regions for {unique_ctypes} are selected")
+	unique_ctypes = df_files["cell_type"].unique()
+	df_region = df_region.loc[df_region["Type"].apply(lambda x: x in unique_ctypes), :]
+	df_region["dmr_id"] = list(range(df_region.shape[0]))
+	df_region.rename(columns={"Type":"ctype"}, inplace=True)
+	print(df_region)
+	unique_ctypes=df_region["ctype"].unique()
+	print(f"Regions for {unique_ctypes} are selected")
 
 	# Read cpg file 
 	if args.genome == "hg19":
