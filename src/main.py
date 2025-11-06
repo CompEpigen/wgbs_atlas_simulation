@@ -6,6 +6,8 @@ from read import simulate_reads
 from region import merge_close_regions, find_cpg_overlaps
 from database import download
 
+pd.options.mode.chained_assignment = None 
+
 def arg_parser():
 	# Parse input arguments
 	parser = argparse.ArgumentParser()
@@ -29,11 +31,12 @@ def filename2ctype(f_name: str) -> str:
 	'''
 
 	f_name = os.path.basename(f_name)
-	file_ctype = f_name.split("_")[1].split("-Z")[0]
+	file_ctype = "_".join(f_name.split("_")[1:]).split("-Z")[0].strip()
 	try:
 		return df_ctype_match[file_ctype]
 	except KeyError:
 		print(f"{f_name} cannot be matched to the 39 cell types. NA is assigned for the cell type")
+		# print(f_name, "---->", file_ctype)
 		return "NA"
 
 if __name__=="__main__":
@@ -47,7 +50,7 @@ if __name__=="__main__":
 
 	# load cell tyep match dictionary 
 	global df_ctype_match
-	f_cell_type_match = download("cell_type_match")
+	f_cell_type_match = "data/cell_type_match.json"
 	with open(f_cell_type_match, "r") as fp:
 		df_ctype_match = json.load(fp)
 
@@ -117,13 +120,16 @@ if __name__=="__main__":
 
 		# Read input .pat file
 		input_file = df_files.loc[idx, "files"]
-		print(f"{input_file} is being processed...")
-		f_out = os.path.join(args.output_dir, 
-							 os.path.basename(input_file).replace(".pat","_reads.csv"))
-		df_reads = pd.read_csv(input_file, sep="\t", header=None)
-		df_reads.columns = ["chr", "index", "methyl", "n_reads"] # for the consistency 
+		try:
+			print(f"{input_file} is being processed...")
+			f_out = os.path.join(args.output_dir, 
+								os.path.basename(input_file).replace(".pat","_reads.csv"))
+			df_reads = pd.read_csv(input_file, sep="\t", header=None)
+			df_reads.columns = ["chr", "index", "methyl", "n_reads"] # for the consistency 
 
-		# Read simulation 
-		res = simulate_reads(df_reads, cpg_overlaps, genome=args.genome, n_cores=args.cores)
-		res["ctype"] = df_files.loc[idx, "cell_type"]
-		res.to_csv(f_out, header= True, sep="\t", index=False)
+			# Read simulation 
+			res = simulate_reads(df_reads, cpg_overlaps, genome=args.genome, n_cores=args.cores)
+			res["ctype"] = df_files.loc[idx, "cell_type"]
+			res.to_csv(f_out, header= True, sep="\t", index=False)
+		except:
+			print(f"Error procesing {input_file}. Moving to the next one")
