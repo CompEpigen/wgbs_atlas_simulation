@@ -8,7 +8,21 @@ We implemented python codes to simulate sequence reads from the normal cell-type
 We provide `requirements.txt` and `Dockerfile` files for setting up the environment. Please follow the [Set-up](https://github.com/CompEpigen/methylseq_simulation?tab=readme-ov-file#set-up) section in our *methylseq_simulation* repo. 
 
 ### Data preparation
-You can download `.pat` files for the normal cell-type methylation atlas [GEO page](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE186458). The `custom` button allows you to select files to download. Please, note that our code currently supports only **hg19** aligned files. 
+Please, note that our code currently supports only **hg19** aligned files. 
+
+#### [Recomended]: Download using [geofetch](https://github.com/pepkit/geofetch) CLI.
+1. Install geofetch following
+2. Run the next code to selectively download correct `.pat` files:
+
+```
+geofetch -i GSE186458 --processed --filter "Z[0-9A-Z]+\.pat\.gz$" \
+  -m /path/to/your/metadata/folder \
+  -g /path/to/your/data/folder
+```
+
+
+#### [Alternative]: Manual download from GEO
+You can download `.pat` files for the normal cell-type methylation atlas [GEO page](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE186458). The `custom` button allows you to select files to download. 
 
 <img src="img/GEO_screenshot.png" alt="isolated" width="500"/>
 
@@ -78,15 +92,14 @@ optional arguments:
 
 ## Citation
 ```
-@article {Jeong2023.10.29.564590,
-	author = {Jeong, Yunhee and Gerh{\"a}user, Clarissa and Sauter, Guido and Schlomm, Thorsten and Rohr, Karl and Lutsik, Pavlo},
-	title = {MethylBERT: A Transformer-based model for read-level DNA methylation pattern identification and tumour deconvolution},
-	elocation-id = {2023.10.29.564590},
-	year = {2024},
-	doi = {10.1101/2023.10.29.564590},
-	publisher = {Cold Spring Harbor Laboratory},
-	URL = {https://www.biorxiv.org/content/early/2024/05/22/2023.10.29.564590},
-	eprint = {https://www.biorxiv.org/content/early/2024/05/22/2023.10.29.564590.full.pdf},
-	journal = {bioRxiv}
+@article{jeong2025methylbert,
+  title={MethylBERT enables read-level DNA methylation pattern identification and tumour deconvolution using a Transformer-based model},
+  author={Jeong, Yunhee and Gerh{\"a}user, Clarissa and Sauter, Guido and Schlomm, Thorsten and Rohr, Karl and Lutsik, Pavlo},
+  journal={Nature Communications},
+  volume={16},
+  number={1},
+  pages={788},
+  year={2025},
+  publisher={Nature Publishing Group UK London}
 }
 ```
