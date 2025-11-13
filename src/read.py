@@ -38,7 +38,7 @@ def get_processed_sequences(start: int, end: int, methyl_seq: str, dna_seq: str,
 
 	# K-mer sequences
 	if k>0:
-		kmer_seq, res_methyl_seq = kmers(dna_seq, res_methyl_seq, k=k)
+		kmer_seq, _ = kmers(dna_seq, res_methyl_seq, k=k) # Fix: do not overwrite methyl_seq with k_mers variant so that all models that use original sequence can learn correctly. For MethylBERT it means that additional postprocessing must be done. 
 
 	return kmer_seq, res_methyl_seq
 
