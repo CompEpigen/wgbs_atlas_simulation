@@ -20,6 +20,7 @@ def arg_parser():
 	parser.add_argument("-g", "--genome", type=str, default="hg19", help="Reference genome (either hg19 or hg38). Currently only hg19 is available. (default: hg19)")
 	parser.add_argument("-f", "--f_input", required=True, help="Text file containing a list of .pat files OR path to a .pat file")
 	parser.add_argument("-wd", "--wgbstools_dir", help="The directory where wgbstools is installed. Only needed to be provided once per genome.")
+	parser.add_argument("-ov", "--overwrite_processed_files", action=argparse.BooleanOptionalAction, help="Force overwrite of already processed files.")
 	
 
 	return parser.parse_args()
@@ -172,22 +173,26 @@ if __name__=="__main__":
 
 		# Read input .pat file
 		input_file = df_files.loc[idx, "files"]
-		# try:
-		print(f"{input_file} is being processed...")
-		# Generate output filename (handle both .pat and .pat.gz)
-		base_name = os.path.basename(input_file)
-		if base_name.endswith('.pat.gz'):
-			out_name = base_name.replace(".pat.gz", "_reads.csv")
-		else:
-			out_name = base_name.replace(".pat", "_reads.csv")
-		f_out = os.path.join(args.output_dir, out_name)
-        
-        # Read .pat file (pandas automatically handles .gz compression)
-		df_reads = pd.read_csv(input_file, sep="\t", header=None, compression='infer')
-		df_reads.columns = ["chr", "index", "methyl", "n_reads"] 
-		# Read simulation 
-		res = simulate_reads(df_reads, cpg_overlaps, wgbstools_ref_dir=args.wgbstools_dir, genome=args.genome, n_cores=args.cores)
-		res["ctype"] = df_files.loc[idx, "cell_type"]
-		res.to_csv(f_out, header= True, sep="\t", index=False)
-		# except:
-		# 	print(f"Error procesing {input_file}. Moving to the next one")
+		try:
+			print(f"{input_file} is being processed...")
+			# Generate output filename (handle both .pat and .pat.gz)
+			base_name = os.path.basename(input_file)
+			if base_name.endswith('.pat.gz'):
+				out_name = base_name.replace(".pat.gz", "_reads.csv")
+			else:
+				out_name = base_name.replace(".pat", "_reads.csv")
+			
+			f_out = os.path.join(args.output_dir, out_name)
+			if not args.overwrite_processed_files:
+				if(os.path.exists(f_out)):
+					continue
+			
+			# Read .pat file (pandas automatically handles .gz compression)
+			df_reads = pd.read_csv(input_file, sep="\t", header=None, compression='infer')
+			df_reads.columns = ["chr", "index", "methyl", "n_reads"] 
+			# Read simulation 
+			res = simulate_reads(df_reads, cpg_overlaps, wgbstools_ref_dir=args.wgbstools_dir, genome=args.genome, n_cores=args.cores)
+			res["ctype"] = df_files.loc[idx, "cell_type"]
+			res.to_csv(f_out, header= True, sep="\t", index=False)
+		except:
+			print(f"Error procesing {input_file}. Moving to the next one")
