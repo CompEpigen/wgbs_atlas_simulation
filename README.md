@@ -26,6 +26,7 @@ geofetch -i GSE186458 --processed --filter "\.hg38\.pat\.gz$" \
   -m /path/to/your/metadata/folder \
   -g /path/to/your/data/folder
 ```
+**Soem files may fail to download properly using this method and result in error during parsing. In such case targeted manual download is advised** 
 
 #### [Alternative]: Manual download from GEO
 You can download `.pat` files for the normal cell-type methylation atlas [GEO page](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE186458). The `custom` button allows you to select files to download. 
