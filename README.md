@@ -8,18 +8,24 @@ We implemented python codes to simulate sequence reads from the normal cell-type
 We provide `requirements.txt` and `Dockerfile` files for setting up the environment. Please follow the [Set-up](https://github.com/CompEpigen/methylseq_simulation?tab=readme-ov-file#set-up) section in our *methylseq_simulation* repo. 
 
 ### Data preparation
-Please, note that our code currently supports only **hg19** aligned files. 
+Please, note that our code requires running [wgbstools](https://github.com/nloyfer/wgbs_tools) for getting reference genomes and cpg locations prior execution. 
 
 #### [Recomended]: Download using [geofetch](https://github.com/pepkit/geofetch) CLI.
 1. Install geofetch following
 2. Run the next code to selectively download correct `.pat` files:
 
+For hg19
 ```
 geofetch -i GSE186458 --processed --filter "Z[0-9A-Z]+\.pat\.gz$" \
   -m /path/to/your/metadata/folder \
   -g /path/to/your/data/folder
 ```
-
+For hg38
+```
+geofetch -i GSE186458 --processed --filter "\.hg38\.pat\.gz$" \
+  -m /path/to/your/metadata/folder \
+  -g /path/to/your/data/folder
+```
 
 #### [Alternative]: Manual download from GEO
 You can download `.pat` files for the normal cell-type methylation atlas [GEO page](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE186458). The `custom` button allows you to select files to download. 
@@ -27,10 +33,8 @@ You can download `.pat` files for the normal cell-type methylation atlas [GEO pa
 <img src="img/GEO_screenshot.png" alt="isolated" width="500"/>
 
 ### Simulate reads from the prepared data
-1. Unzip the downloaded `.pat.gz` files. `.pat` file format is required for the simulation.
-2. Create a `.txt` file including a list of files you want to process. **Please, do not change the input file names!!**
+1.[OPTIONAL] Create a `.txt` file including a list of files you want to process. **Please, do not change the input file names!!**  
 
-  e.g., )
 ```
 > cat input.txt 
 /home/GSE186458_normal_cell_atlas/data/pat/GSM5652285_Blood-T-CenMem-CD4-Z00000417.pat
@@ -39,28 +43,33 @@ You can download `.pat` files for the normal cell-type methylation atlas [GEO pa
 /home/GSE186458_normal_cell_atlas/data/pat/GSM5652317_Blood-B-Z000000UB.pat
 
 ```
-3. **(Optional)** Select genomic regions in [Supplementary Table 4 provided by Loyfer et al.](https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-022-05580-6/MediaObjects/41586_2022_5580_MOESM4_ESM.xlsx) to simulate reads, and create a (tab-deliminated) `.csv` file. In the next step, this file should be given with `-r` option. **Otherwise, the simulation automatically determines cell type-specific hypomethylated regions from the input file.**
+2. Save target genomic regions to simulate reads into .tsv or .csv file. In the next step, this file should be given with `-r` option.
+To match regions from the paper, refer to [UXM repo](https://github.com/nloyfer/UXM_deconv/tree/main/supplemental).
 
-e.g.,)
 ```
-> cat region.csv
-Type	chr	start	end	startCpG	endCpG	position	Number of CpGs	Length	Target meth. 	Background meth.	Diff	Genomic class	Gene
-Adipocytes	chr1	12559496	12560014	251636	251647	chr1:12559496-12560014	11CpGs	518bp	0.231	0.914	0.683	intron	VPS13D
-Adipocytes	chr7	134849833	134850163	11801018	11801023	chr7:134849833-134850163	5CpGs	330bp	0.164	0.833	0.669	TTS	C7orf49
-Adipocytes	chr2	127878592	127878832	3458229	3458234	chr2:127878592-127878832	5CpGs	240bp	0.209	0.877	0.668	Intergenic	BIN1
-Adipocytes	chr11	62304487	62304527	16537896	16537901	chr11:62304487-62304527	5CpGs	40bp	0.267	0.903	0.636	intron	AHNAK
+> cat Atlas.U25.l4.hg38.full.tsv | awk '{ OFS="\t"; print $1, $2, $3, $4, $5, $6, $7, $8 }' | awk 'NR<=5'
+chr     start   end     startCpG        endCpG  target  name    direction
+chr1    1262136 1262432 24569   24584   Eryth-prog      chr1:1262136-1262432    U
+chr1    2384160 2384745 63940   63960   Neuron  chr1:2384160-2384745    U
+chr1    5950648 5950918 133709  133715  Epid-Kerat      chr1:5950648-5950918    U
+chr1    5959258 5959335 133878  133884  Pancreas-Delta  chr1:5959258-5959335    U
 ```
-4. Run the source code with the command line `python src/main.py [options]`.
+3. Run the source code with the command line `python src/main.py [options]`.
 ```
-python src/main.py -f input.txt -c 50 -o ./res/
+python src/main.py -f input.txt -c 50 -o ./res/ --wgbstools_dir your/path/to/wgbstools --genome hg38 -r Atlas.U25.l4.hg38.full.tsv
+```
+Alternatively, you can provide a target directory path with all files to be processed or a single target file path
+
+```
+python src/main.py -f your/path/to/target/files -c 50 -o ./res/ --wgbstools_dir your/path/to/wgbstools --genome hg38 -r Atlas.U25.l4.hg38.full.tsv
 ```
 
 ### Example output
 ```
-> head -n 3 test/res/GSM5652317_Blood-B-Z000000UB_reads.csv 
-ref_name	ref_pos	original_seq	dna_seq	original_methyl	methyl_seq	dmr_label	dmr_ctype	ctype
-chr1    8212920 GCTCATGGGTACATGGCTAGTAAACACCAGAGCTGGCTCTAGGACTCGCATTGATGTCGGTTAATTGATATACCTGACCCCGCTACTAGTGCACAATTACTGCCCTGC    GCT CTC TCA CAT ATG TGG GGG GGT GTA TAC ACA CAT ATG TGG GGC GCT CTA TAG AGT GTA TAA AAA AAC ACA CAC ACC CCA CAG AGA GAG AGC GCT CTG TGG GGC GCT CTC TCT CTA TAG AGG GGA GAC ACT CTC TCG CGC GCA CAT ATT TTG TGA GAT ATG TGT GTC TCG CGG GGT GTT TTA TAA AAT ATT TTG TGA GAT ATA TAT ATA TAC ACC CCT CTG TGA GAC ACC CCC CCC CCG CGC GCT CTA TAC ACT CTA TAG AGT GTG TGC GCA CAC ACA CAA AAT ATT TTA TAC ACT CTG TGC GCC CCC CCT CTG TGC   CCT     2222222222222222222222222222222222222222222221222222222212222222222222222222222022222222222222222222222222   531     Blood-T Blood-B
-chr1	3278274	GGTGGTGAGAAGTGACTGTGACCCGGGAGCGAGGGCAGGTGGTGAGAAGTGACGCGGTCTGGGAGGGCAGGAGGTGAGAAGTGACTGC	GGT GTG TGG GGT GTG TGA GAG AGA GAA AAG AGT GTG TGA GAC ACT CTG TGT GTG TGA GAC ACC CCC CCG CGG GGG GGA GAG AGC GCG CGA GAG AGG GGG GGC GCA CAG AGG GGT GTG TGG GGT GTG TGA GAG AGA GAA AAG AGT GTG TGA GAC ACG CGC GCG CGG GGT GTC TCT CTG TGG GGG GGA GAG AGG GGG GGC GCA CAG AGG GGA GAG AGG GGT GTG TGA GAG AGA GAA AAG AGT GTG TGA GAC ACT CTG TGC	CCTCTCCC	22222222222222222222221222221222222222222222222222202122222222222222222222222222222222	493	Blood-NK	Blood-B
+> head -n 3 GSM5652196_Pancreas-Endothel-Z00000430.hg38_reads.csv 
+ref_name	ref_pos	original_seq	dna_seq	original_methyl	methyl_seq	dmr_label	dmr_ctype	dmr_coordinates	ctype
+chr1	1262099	GCCCACCTCAGCCTCCCAAAGTGCTGGAATTACAGGCGTGAGCCACCGCGCCCGGCCGACCACTACTCACTCGGTGGTATATATTCTTCAGATCAGCTGAAGGCACACACAC	GCC CCC CCA CAC ACC CCT CTC TCA CAG AGC GCC CCT CTC TCC CCC CCA CAA AAA AAG AGT GTG TGC GCT CTG TGG GGA GAA AAT ATT TTA TAC ACA CAG AGG GGC GCG CGT GTG TGA GAG AGC GCC CCA CAC ACC CCG CGC GCG CGC GCC CCC CCG CGG GGC GCC CCG CGA GAC ACC CCA CAC ACT CTA TAC ACT CTC TCA CAC ACT CTC TCG CGG GGT GTG TGG GGT GTA TAT ATA TAT ATA TAT ATT TTC TCT CTT TTC TCA CAG AGA GAT ATC TCA CAG AGC GCT CTG TGA GAA AAG AGG GGC GCA CAC ACA CAC ACA CAC ACA CAC	CCCCCC	2222222222222222222222222222222222221222222222121222122212222222222222212222222222222222222222222222222222222222	0	Eryth-prog	chr1:1262136-1262432	Endothel
+chr1	1262113	CCCAAAGTGCTGGAATTACAGGCGTGAGCCACCGCGCCCGGCCGACCACTACTCACTCGGTGGTATATATTCTTCAGATCAGCTGAAGGCACACACACGCATCGTAACAAGTACTTTAACACGCCCTGGACACCTGCTCCCGGGCCTTAT	CCC CCA CAA AAA AAG AGT GTG TGC GCT CTG TGG GGA GAA AAT ATT TTA TAC ACA CAG AGG GGC GCG CGT GTG TGA GAG AGC GCC CCA CAC ACC CCG CGC GCG CGC GCC CCC CCG CGG GGC GCC CCG CGA GAC ACC CCA CAC ACT CTA TAC ACT CTC TCA CAC ACT CTC TCG CGG GGT GTG TGG GGT GTA TAT ATA TAT ATA TAT ATT TTC TCT CTT TTC TCA CAG AGA GAT ATC TCA CAG AGC GCT CTG TGA GAA AAG AGG GGC GCA CAC ACA CAC ACA CAC ACA CAC ACG CGC GCA CAT ATC TCG CGT GTA TAA AAC ACA CAA AAG AGT GTA TAC ACT CTT TTT TTA TAA AAC ACA CAC ACG CGC GCC CCC CCT CTG TGG GGA GAC ACA CAC ACC CCT CTG TGC GCT CTC TCC CCC CCG CGG GGG GGC GCC CCT CTT TTA TAT	CCCCCCCCCC	222222222222222222222212222222221212221222122222222222222122222222222222222222222222222222222222212222122222222222222222212222222222222222221222222222	0	Eryth-prog	chr1:1262136-1262432	Endothel
 ```
 
 
@@ -87,6 +96,9 @@ optional arguments:
   -f F_INPUT, --f_input F_INPUT
                         Text file containing a list of .pat files OR path to a
                         .pat file
+  -wd WGBSTOOLS_DIR --wgbstools_dir WGBSTOOLS_DIR 
+                        The directory where wgbstools is installed. Only needed 
+                        to be provided once per genome
 
 ```
 

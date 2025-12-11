@@ -19,6 +19,8 @@ def find_cpg_overlaps_chr(df_regions: pd.DataFrame, df_cpgs: pd.DataFrame) -> pd
 	df_cpgs = df_cpgs.loc[list(cpg_idx),:]
 	df_cpgs["dmr_label"] = region_idx 
 	df_cpgs["dmr_ctype"] = [df_regions.loc[ii, "ctype"] for ii in region_idx] # due to duplicated index
+	df_cpgs["dmr_coordinates"] = [f"{df_regions.loc[ii, 'chr']}:{df_regions.loc[ii, 'start']}-{df_regions.loc[ii, 'end']}" 
+                                   for ii in region_idx]
 	return df_cpgs
 
 def find_cpg_overlaps(df_region: pd.DataFrame, df_cpg: pd.DataFrame, n_cores=10) -> pd.DataFrame:

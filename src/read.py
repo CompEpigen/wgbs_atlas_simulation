@@ -1,8 +1,8 @@
 import pandas as pd
-import pickle as pk
+import pickle as pkl
 import multiprocessing as mp
 import os, random, re, warnings, gc
-from database import download
+from database import get_reference_file
 
 def kmers(seq: str, methyl_seq: list, k=3):
 	converted_seq = list()
@@ -127,7 +127,8 @@ def simulate_reads_chr(df_reads: pd.DataFrame,
 								"original_methyl": [read["methyl"]],
 								"methyl_seq": ["".join(methyl_seq)],
 								"dmr_label": [cpg_overlaps.loc[read["index"], "dmr_label"]],
-								"dmr_ctype": [cpg_overlaps.loc[read["index"], "dmr_ctype"]]})
+								"dmr_ctype": [cpg_overlaps.loc[read["index"], "dmr_ctype"]],
+								"dmr_coordinates": [cpg_overlaps.loc[read["index"], "dmr_coordinates"]]})
 
 	df_res = list()
 		
@@ -244,7 +245,8 @@ def simulate_reads_chr(df_reads: pd.DataFrame,
 
 
 def simulate_reads(df_reads: pd.DataFrame, 
-				   cpg_overlaps: pd.DataFrame, 
+				   cpg_overlaps: pd.DataFrame,
+				   wgbstools_ref_dir: str, 
 				   genome: str = "hg19", 
 				   n_cores: int = 10):
 	# Filter reads not fully overlapping with the regions
@@ -253,12 +255,9 @@ def simulate_reads(df_reads: pd.DataFrame,
 	DATA_DIR = os.path.join(os.getcwd(), "data") 
 
 	# Read reference genome saved in a dictionary 
-	if genome == "hg19":
-		f_genome = download("hg19_genome")
-		with open(f_genome, "rb") as fp:
-			dict_ref = pk.load(fp)
-	else:
-		pass
+	f_genome = get_reference_file(genome=genome, file_type='genome', wgbstools_ref_dir=wgbstools_ref_dir)
+	with open(f_genome, "rb") as fp:
+			dict_ref = pkl.load(fp)
 
 	# Arguments for multiprocessing - divide reads into each chromosome
 	list_args = list()
