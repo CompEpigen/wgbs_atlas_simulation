@@ -21,7 +21,6 @@ def arg_parser():
 	parser.add_argument("-f", "--f_input", required=True, help="Text file containing a list of .pat files OR path to a .pat file")
 	parser.add_argument("-wd", "--wgbstools_dir", help="The directory where wgbstools is installed. Only needed to be provided once per genome.")
 	parser.add_argument("-ov", "--overwrite_processed_files", action=argparse.BooleanOptionalAction, help="Force overwrite of already processed files.")
-	
 
 	return parser.parse_args()
 
@@ -85,10 +84,11 @@ def filename2ctype(f_name: str) -> str:
 	'''
 
 	f_name = os.path.basename(f_name)
-	file_ctype = "_".join(f_name.split("_")[1:]).split("-Z")[0].strip()
+	f_name_short = "_".join(f_name.split("_")[1:]).split(".hg38")[0]
 	try:
-		return df_ctype_match[file_ctype]
+		return df_ctype_match[f_name_short]
 	except KeyError:
+		print(f_name_short)
 		print(f"{f_name} cannot be matched to the 39 cell types. NA is assigned for the cell type")
 		# print(f_name, "---->", file_ctype)
 		return "NA"
@@ -104,7 +104,7 @@ if __name__=="__main__":
 
 	# load cell tyep match dictionary 
 	global df_ctype_match
-	f_cell_type_match = "data/cell_type_match.json"
+	f_cell_type_match = "data/files_to_cell_groups.json"
 	with open(f_cell_type_match, "r") as fp:
 		df_ctype_match = json.load(fp)
 
@@ -173,26 +173,26 @@ if __name__=="__main__":
 
 		# Read input .pat file
 		input_file = df_files.loc[idx, "files"]
-		try:
-			print(f"{input_file} is being processed...")
-			# Generate output filename (handle both .pat and .pat.gz)
-			base_name = os.path.basename(input_file)
-			if base_name.endswith('.pat.gz'):
-				out_name = base_name.replace(".pat.gz", "_reads.csv")
-			else:
-				out_name = base_name.replace(".pat", "_reads.csv")
-			
-			f_out = os.path.join(args.output_dir, out_name)
-			if not args.overwrite_processed_files:
-				if(os.path.exists(f_out)):
-					continue
-			
-			# Read .pat file (pandas automatically handles .gz compression)
-			df_reads = pd.read_csv(input_file, sep="\t", header=None, compression='infer')
-			df_reads.columns = ["chr", "index", "methyl", "n_reads"] 
-			# Read simulation 
-			res = simulate_reads(df_reads, cpg_overlaps, wgbstools_ref_dir=args.wgbstools_dir, genome=args.genome, n_cores=args.cores)
-			res["ctype"] = df_files.loc[idx, "cell_type"]
-			res.to_csv(f_out, header= True, sep="\t", index=False)
-		except:
-			print(f"Error procesing {input_file}. Moving to the next one")
+		# try:
+		print(f"{input_file} is being processed...")
+		# Generate output filename (handle both .pat and .pat.gz)
+		base_name = os.path.basename(input_file)
+		if base_name.endswith('.pat.gz'):
+			out_name = base_name.replace(".pat.gz", "_reads.csv")
+		else:
+			out_name = base_name.replace(".pat", "_reads.csv")
+		
+		f_out = os.path.join(args.output_dir, out_name)
+		if not args.overwrite_processed_files:
+			if(os.path.exists(f_out)):
+				continue
+		
+		# Read .pat file (pandas automatically handles .gz compression)
+		df_reads = pd.read_csv(input_file, sep="\t", header=None, compression='infer')
+		df_reads.columns = ["chr", "index", "methyl", "n_reads"] 
+		# Read simulation 
+		res = simulate_reads(df_reads, cpg_overlaps, wgbstools_ref_dir=args.wgbstools_dir, genome=args.genome, n_cores=args.cores)
+		res["ctype"] = df_files.loc[idx, "cell_type"]
+		res.to_csv(f_out, header= True, sep="\t", index=False)
+		# except:
+		# 	print(f"Error procesing {input_file}. Moving to the next one")
