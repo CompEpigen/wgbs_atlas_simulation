@@ -29,9 +29,10 @@ def find_cpg_overlaps(df_region: pd.DataFrame, df_cpg: pd.DataFrame, n_cores=10)
 	'''
 
 	list_args = list()
-	for i in range(1, 23):
-		q = df_region[df_region["chr"]=="chr%d"%i]
-		s = df_cpg[df_cpg["chr"]=="chr%d"%i]
+	chroms = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
+	for chrom in chroms:
+		q = df_region[df_region["chr"] == chrom]
+		s = df_cpg[df_cpg["chr"] == chrom]
 		if (q.shape[0] == 0) or (s.shape[0] == 0):
 			continue
 		else:

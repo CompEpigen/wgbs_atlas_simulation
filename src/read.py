@@ -2,6 +2,7 @@ import pandas as pd
 import pickle as pkl
 import multiprocessing as mp
 import os, random, re, warnings, gc
+import numpy as np
 from database import get_reference_file
 
 def kmers(seq: str, methyl_seq: list, k=3):
@@ -19,8 +20,8 @@ def kmers(seq: str, methyl_seq: list, k=3):
 	return " ".join(converted_seq), methyl_seq
 
 def get_processed_sequences(start: int, end: int, methyl_seq: str, dna_seq: str, first_cpg_idx: int, last_cpg_idx: int, k: int, cpg_overlaps):
-	
-	# methylation pattern conversion match in the data 
+
+	# methylation pattern conversion match in the data
 	methyl_patterns={"T":"0","C":"1", ".":"2"}
 
 	cpg_idx = [t.start() for t in re.finditer("CG",dna_seq)]
@@ -38,21 +39,21 @@ def get_processed_sequences(start: int, end: int, methyl_seq: str, dna_seq: str,
 
 	# K-mer sequences
 	if k>0:
-		kmer_seq, _ = kmers(dna_seq, res_methyl_seq, k=k) # Fix: do not overwrite methyl_seq with k_mers variant so that all models that use original sequence can learn correctly. For MethylBERT it means that additional postprocessing must be done. 
+		kmer_seq, _ = kmers(dna_seq, res_methyl_seq, k=k)
 
 	return kmer_seq, res_methyl_seq
 
-def simulate_read_start_end(cpg_overlaps: pd.DataFrame, 
-							first_idx: int, 
-							last_idx: int, 
+def simulate_read_start_end(cpg_overlaps: pd.DataFrame,
+							first_idx: int,
+							last_idx: int,
 							seq_len: int=150):
 	"""
-		Find the start and end position of simulated read 
+		Find the start and end position of simulated read
 
 		cpg_overlaps: pd.DataFrame
 			DataFrame of CpGs overlapping with the given region
 		first_idx, last_idx: int, int
-			Index of the first and the last index 
+			Index of the first and the last index
 	"""
 	start, end = cpg_overlaps.loc[first_idx, "start"]-1, cpg_overlaps.loc[last_idx, "start"] + 1 # -1 and + 1 to avoid methyl patterns at the beginning and the end of the read
 
@@ -75,215 +76,355 @@ def simulate_read_start_end(cpg_overlaps: pd.DataFrame,
 	return start, end
 
 
+def _build_region_bounds(cpg_overlaps: pd.DataFrame) -> pd.DataFrame:
+	"""
+	Derive per-region CpG-index boundaries from the per-CpG cpg_overlaps table.
+	Returns one row per dmr_label with region_startCpG and region_endCpG.
+	"""
+	reset = cpg_overlaps.reset_index()  # brings CpG integer index into 'index' column
+	return (
+		reset.groupby("dmr_label", as_index=False)
+		.agg(
+			chr=("chr", "first"),
+			region_startCpG=("index", "min"),
+			region_endCpG=("index", "max"),
+			dmr_ctype=("dmr_ctype", "first"),
+			dmr_coordinates=("dmr_coordinates", "first"),
+		)
+	)
 
-def simulate_reads_chr(df_reads: pd.DataFrame, 
-					   cpg_overlaps: pd.DataFrame, 
-					   ref_string: str, 
-					   chromosome: str, 
-					   k: int=3):
-	'''
-	Simulate reads in the given chromosome 
-	'''
 
-	def single_read_simulation(read: pd.DataFrame, first_idx: int, last_idx: int, methyl_seq: str):
+def _assign_atlas_regions_chr(
+	reads_chr: pd.DataFrame,
+	regions_chr: pd.DataFrame,
+) -> pd.DataFrame:
+	"""
+	Assign each read to the first overlapping atlas region using UXM's any-overlap
+	condition in CpG-index space:
+		read_startCpG <= region_endCpG  AND  read_endCpG >= region_startCpG
 
-		# The second read is not fully overlapping with the region
-		n_count = 0
+	Also computes cpgs_in_region = size of the overlap in CpG positions (including
+	dots), matching how wgbstools counts for its --rlen filter.
+
+	Reads with no matching region are dropped.
+	Adds columns: region_startCpG, region_endCpG, dmr_label, dmr_ctype,
+	              dmr_coordinates, cpgs_in_region.
+	"""
+	if reads_chr.empty or regions_chr.empty:
+		return reads_chr.iloc[:0]
+
+	reads = reads_chr.copy().sort_values("index").reset_index(drop=True)
+	reads["_read_end"] = reads["index"] + reads["methyl"].str.len() - 1
+
+	regions = regions_chr.sort_values("region_startCpG").reset_index(drop=True)
+	r_starts = regions["region_startCpG"].to_numpy()
+	r_ends   = regions["region_endCpG"].to_numpy()
+
+	matched_idx = np.full(len(reads), -1, dtype=int)
+	j = 0
+	for i in range(len(reads)):
+		rs  = int(reads.at[i, "index"])
+		re_ = int(reads.at[i, "_read_end"])
+		# advance past regions that end before this read starts
+		while j < len(r_starts) and r_ends[j] < rs:
+			j += 1
+		# first remaining region: overlaps if it starts before read ends
+		if j < len(r_starts) and r_starts[j] <= re_:
+			matched_idx[i] = j
+
+	mask    = matched_idx >= 0
+	reads   = reads[mask].reset_index(drop=True)
+	matched = regions.iloc[matched_idx[mask]].reset_index(drop=True)
+
+	reads["region_startCpG"] = matched["region_startCpG"].values
+	reads["region_endCpG"]   = matched["region_endCpG"].values
+	reads["dmr_label"]       = matched["dmr_label"].values
+	reads["dmr_ctype"]       = matched["dmr_ctype"].values
+	reads["dmr_coordinates"] = matched["dmr_coordinates"].values
+	reads["cpgs_in_region"]  = (
+		np.minimum(reads["_read_end"], reads["region_endCpG"]) -
+		np.maximum(reads["index"],     reads["region_startCpG"]) + 1
+	).astype(int)
+	return reads.drop(columns=["_read_end"])
+
+
+def simulate_reads_chr(df_reads: pd.DataFrame,
+					   cpg_overlaps: pd.DataFrame,
+					   ref_string: str,
+					   chromosome: str,
+					   k: int = 3,
+					   split_paired_end_reads: bool = True,
+					   split_long_reads: bool = True):
+	"""Simulate reads in the given chromosome."""
+
+	def single_read_simulation(read, first_idx, last_idx, methyl_seq):
+		# Safety: walk boundary indices into cpg_overlaps (for paired-end splits that
+		# may land on a dot position not present in the atlas).
 		while first_idx not in cpg_overlaps.index:
-			#print(methyl_seq, first_idx, cpg_overlaps.index)
 			first_idx += 1
-			n_count+=1
 			methyl_seq = methyl_seq[1:]
-			if len(methyl_seq) == 0:
-				print(read, first_idx, last_idx, methyl_seq)
-				raise ValueError(f"first_idx disappeared: {first_idx}, {last_idx}, {n_count}")
+			if not methyl_seq:
 				return None
-
-		n_count = 0
 		while last_idx not in cpg_overlaps.index:
-			#print(methyl_seq, first_idx, cpg_overlaps.index)
 			last_idx -= 1
 			methyl_seq = methyl_seq[:-1]
-			n_count+=1
-			
-			if len(methyl_seq) == 0:
-				print(read, first_idx, last_idx, methyl_seq)
-				raise ValueError(f"last_idx disappeared: {first_idx}, {last_idx}, {n_count}")
+			if not methyl_seq:
 				return None
 
-		start,end =  simulate_read_start_end(cpg_overlaps, first_idx, last_idx)
-		original_dna_seq = ref_string[start:end+1]
-		kmer_seq, methyl_seq = get_processed_sequences(start, end, 
-													   methyl_seq=methyl_seq,
-													   dna_seq=original_dna_seq,
-													   first_cpg_idx=first_idx,
-													   last_cpg_idx=last_idx,
-													   k=k, cpg_overlaps=cpg_overlaps)
-		
-		return pd.DataFrame({"ref_name": [chromosome],
-								"ref_pos": [start],
-								"original_seq" : [original_dna_seq],
-								"dna_seq": [kmer_seq],
-								"original_methyl": [read["methyl"]],
-								"methyl_seq": ["".join(methyl_seq)],
-								"dmr_label": [cpg_overlaps.loc[read["index"], "dmr_label"]],
-								"dmr_ctype": [cpg_overlaps.loc[read["index"], "dmr_ctype"]],
-								"dmr_coordinates": [cpg_overlaps.loc[read["index"], "dmr_coordinates"]]})
+		start, end = simulate_read_start_end(cpg_overlaps, first_idx, last_idx)
+		original_dna_seq = ref_string[start : end + 1]
+		kmer_seq, methyl_out = get_processed_sequences(
+			start, end,
+			methyl_seq=methyl_seq,
+			dna_seq=original_dna_seq,
+			first_cpg_idx=first_idx,
+			last_cpg_idx=last_idx,
+			k=k,
+			cpg_overlaps=cpg_overlaps,
+		)
+		return pd.DataFrame({
+			"ref_name":        [chromosome],
+			"ref_pos":         [start],
+			"original_seq":    [original_dna_seq],
+			"dna_seq":         [kmer_seq],
+			"original_methyl": [read["original_methyl"]],
+			"methyl_seq":      ["".join(methyl_out)],
+			"dmr_label":       [read["dmr_label"]],
+			"dmr_ctype":       [read["dmr_ctype"]],
+			"dmr_coordinates": [read["dmr_coordinates"]],
+			"cpgs_in_region":  [read["cpgs_in_region"]],
+		})
 
-	df_res = list()
-		
+	def paired_end_as_single(read, first_idx, last_idx, methyl_seq, missing_idces):
+		"""
+		Process a paired-end read as one unit without splitting.
+		The unsequenced gap between the two mates is filled with 'N' in original_seq.
+		Dots in the methylation pattern are kept and encoded as '2' in methyl_seq.
+		"""
+		while first_idx not in cpg_overlaps.index:
+			first_idx += 1
+			methyl_seq = methyl_seq[1:]
+			if not methyl_seq:
+				return None
+		while last_idx not in cpg_overlaps.index:
+			last_idx -= 1
+			methyl_seq = methyl_seq[:-1]
+			if not methyl_seq:
+				return None
+
+		start, end = simulate_read_start_end(cpg_overlaps, first_idx, last_idx)
+		original_dna_seq = ref_string[start : end + 1]
+
+		# N-fill the unsequenced region between the two mates.
+		# The gap in genomic space runs from just after the G of the last mate-1
+		# CpG up to just before the C of the first mate-2 CpG.
+		mate1_last_cpg_idx  = first_idx + missing_idces[0] - 1
+		mate2_first_cpg_idx = first_idx + missing_idces[-1] + 1
+		if (mate1_last_cpg_idx  in cpg_overlaps.index and
+				mate2_first_cpg_idx in cpg_overlaps.index):
+			gap_seq_start = cpg_overlaps.loc[mate1_last_cpg_idx,  "start"] + 2 - start
+			gap_seq_end   = cpg_overlaps.loc[mate2_first_cpg_idx, "start"]     - start
+			n_filled_seq  = (
+				original_dna_seq[:gap_seq_start]
+				+ "N" * max(0, gap_seq_end - gap_seq_start)
+				+ original_dna_seq[gap_seq_end:]
+			)
+		else:
+			n_filled_seq = original_dna_seq
+
+		# k-mers and methyl encoding use the actual reference (not N-filled) so
+		# that CpG detection via re.finditer("CG", ...) remains intact.
+		kmer_seq, methyl_out = get_processed_sequences(
+			start, end,
+			methyl_seq=methyl_seq,
+			dna_seq=original_dna_seq,
+			first_cpg_idx=first_idx,
+			last_cpg_idx=last_idx,
+			k=k,
+			cpg_overlaps=cpg_overlaps,
+		)
+		return pd.DataFrame({
+			"ref_name":        [chromosome],
+			"ref_pos":         [start],
+			"original_seq":    [n_filled_seq],
+			"dna_seq":         [kmer_seq],
+			"original_methyl": [read["original_methyl"]],
+			"methyl_seq":      ["".join(methyl_out)],
+			"dmr_label":       [read["dmr_label"]],
+			"dmr_ctype":       [read["dmr_ctype"]],
+			"dmr_coordinates": [read["dmr_coordinates"]],
+			"cpgs_in_region":  [read["cpgs_in_region"]],
+		})
+
+	df_res = []
+
 	for read_idx in range(df_reads.shape[0]):
-		read = df_reads.iloc[read_idx,:]
+		read = df_reads.iloc[read_idx, :].copy()
+		read["original_methyl"] = read["methyl"]   # preserve full original pattern
 
-		# Remove missing patterns at the beginning and the end
-		read["original_pattern"] = read["methyl"]
+		region_start = int(read["region_startCpG"])
+		region_end   = int(read["region_endCpG"])
+		read_start   = int(read["index"])
+		read_end     = read_start + len(read["methyl"]) - 1
+
+		# ── 1. Clip methyl pattern to atlas region boundaries ────────────────
+		clip_left  = max(0, region_start - read_start)
+		clip_right = max(0, read_end - region_end)
+
 		methyl_pattern = read["methyl"]
-		n_count = 0
-		for meth_idx, i in enumerate(methyl_pattern):
-			if (i != ".") and (read["index"] + meth_idx in cpg_overlaps.index):
-				break
-			else:
-				n_count += 1
+		if clip_left > 0:
+			methyl_pattern = methyl_pattern[clip_left:]
+			read["index"] = read_start + clip_left
+		if clip_right > 0:
+			methyl_pattern = methyl_pattern[: len(methyl_pattern) - clip_right]
 
-		if n_count >= len(methyl_pattern):
+		if not methyl_pattern:
 			continue
-		elif n_count > 0:
-			methyl_pattern = methyl_pattern[n_count:]
-			read["index"] += n_count
-			read["nCG"] -= n_count
 
-		n_count = 0
-		for meth_idx, i in enumerate(methyl_pattern[::-1]):
-			if (i != ".") and \
-			   (read["index"] + len(methyl_pattern) - (meth_idx+1) in cpg_overlaps.index):
-				break
-			else:
-				methyl_pattern = methyl_pattern[:-1]
-				read["nCG"] -= 1
-
-		if n_count >= len(methyl_pattern):
+		# ── 2. Trim leading dots ─────────────────────────────────────────────
+		n_lead = len(methyl_pattern) - len(methyl_pattern.lstrip("."))
+		if n_lead >= len(methyl_pattern):
 			continue
-		elif n_count > 0:
-			methyl_pattern = methyl_pattern[:-n_count]
-			read["nCG"] -= n_count
+		if n_lead:
+			methyl_pattern = methyl_pattern[n_lead:]
+			read["index"]  = int(read["index"]) + n_lead
+
+		# ── 3. Trim trailing dots ────────────────────────────────────────────
+		n_trail = len(methyl_pattern) - len(methyl_pattern.rstrip("."))
+		if n_trail >= len(methyl_pattern):
+			continue
+		if n_trail:
+			methyl_pattern = methyl_pattern[:-n_trail]
+
+		if not methyl_pattern:
+			continue
 
 		read["methyl"] = methyl_pattern
-		last_idx = read["index"] + read["nCG"] -1
+		read["nCG"]    = len(methyl_pattern)
+		first_idx = int(read["index"])
+		last_idx  = first_idx + len(methyl_pattern) - 1
 
-		if (last_idx not in cpg_overlaps.index):
-			continue # the read is not fully overlapping 
-
-		min_seq_len = cpg_overlaps.loc[last_idx, "start"] - cpg_overlaps.loc[read["index"], "start"] + 1
-		#min_pos, max_pos = cpg_overlaps.loc[read["index"], "prev_cpg"]+1, cpg_overlaps.loc[last_idx, "next_cpg"]
-		
-		for r in range(read["n_reads"]):
-			# Read length is <=150bp - single-read
-			if ( min_seq_len <= 150 ) and \
-			   ("." not in read["methyl"]) and \
-			   (len(read["methyl"]) > 0):
-
-				res = single_read_simulation(read=read, 
-											 first_idx=read["index"], last_idx=last_idx, 
-											 methyl_seq=read["methyl"])
-				df_res.append(res)
-				
-			else:
-				# Read len > 150 bp - divide the read into two reads
-
-				missing_cpg_idces = [i.start() for i in re.finditer("\.", read["methyl"])]
-				is_distant_read_pairs = (len(missing_cpg_idces) != 0)
-				#if (missing_cpg_idces[0] == 0) or (missing_cpg_idces[-1] == len(read["methyl"]))
-
-				# When the missing CpGs are not consecutive 
-				# Assuming that paired-end reads have unprofiled CpGs beween two reads
-				for a, b in zip(missing_cpg_idces[1:], missing_cpg_idces[:-1]):
-					if a-b != 1:
-						is_distant_read_pairs=False
-
-				if is_distant_read_pairs: # Paried-end reads
-					# First read
-					first_idx = read["index"]
-					last_idx = read["index"] + missing_cpg_idces[0] -1 # change the last idx of the read to the last idx of the last CpG in the first read
-
-					res = single_read_simulation(read=read, 
-												 first_idx=first_idx, last_idx=last_idx, 
-												 methyl_seq=read["methyl"][:missing_cpg_idces[0]])
-					if res is not None: df_res.append(res)
-
-					# Second read
-					first_idx = read["index"] + missing_cpg_idces[-1] + 1
-					last_idx = read["index"] + read["nCG"] -1
-
-					res = single_read_simulation(read=read, 
-												 first_idx=first_idx, last_idx=last_idx, 
-												 methyl_seq=read["methyl"][missing_cpg_idces[-1]+1:])
-					if res is not None: df_res.append(res)
-
-				else: # There is no missing part. The fragment is divded into two parts at the middle
-					half_idx = int(len(read["methyl"])/2)
-					# Divide the fragment into two reads
-					# First read
-					last_idx = read["index"] + half_idx -1
-					#if last_idx in cpg_overlaps.index:
-
-					res = single_read_simulation(read=read, 
-											 first_idx=read["index"], last_idx=last_idx, 
-											 methyl_seq=read["methyl"][:half_idx])
-					if res is not None: df_res.append(res)
-
-					# Second read
-					first_idx = read["index"] + half_idx
-					last_idx = read["index"] + read["nCG"] -1
-					#if first_idx in cpg_overlaps.index:
-					res = single_read_simulation(read=read, 
-												 first_idx=first_idx, last_idx=last_idx, 
-												 methyl_seq=read["methyl"][half_idx:])
-					if res is not None: df_res.append(res)
-				
-	return pd.concat(df_res) if len(df_res) > 0 else None
-	
-
-
-def simulate_reads(df_reads: pd.DataFrame, 
-				   cpg_overlaps: pd.DataFrame,
-				   wgbstools_ref_dir: str, 
-				   genome: str = "hg19", 
-				   n_cores: int = 10):
-	# Filter reads not fully overlapping with the regions
-	df_reads = df_reads[df_reads["index"].isin(cpg_overlaps.index)]
-	df_reads.loc[:, "nCG"] = df_reads['methyl'].apply(lambda x: len(x))
-	DATA_DIR = os.path.join(os.getcwd(), "data") 
-
-	# Read reference genome saved in a dictionary 
-	f_genome = get_reference_file(genome=genome, file_type='genome', wgbstools_ref_dir=wgbstools_ref_dir)
-	with open(f_genome, "rb") as fp:
-			dict_ref = pkl.load(fp)
-
-	# Arguments for multiprocessing - divide reads into each chromosome
-	list_args = list()
-	for chr_idx in range(1, 23):
-		sub_reads = df_reads[df_reads["chr"]=="chr%d"%chr_idx]
-		sub_cpgs = cpg_overlaps[cpg_overlaps["chr"]=="chr%d"%chr_idx]
-		if (sub_reads.shape[0] == 0) or (len(sub_cpgs)==0):
-			print(chr_idx, sub_reads.shape, sub_cpgs.shape)
+		# Safety: both boundary CpGs must be in cpg_overlaps for sequence lookup
+		if first_idx not in cpg_overlaps.index or last_idx not in cpg_overlaps.index:
 			continue
-		else:
-			list_args.append((sub_reads, 
-							  sub_cpgs, 
-							  dict_ref["chr%d"%chr_idx], 
-							  "chr%d"%chr_idx, 
-							  3)) # order according to the "simulate_reads_chr" function
-		del sub_reads, sub_cpgs 	
 
-	# Multiprocessing - simulate reads in each chromosome	
-	with mp.Pool(n_cores) as pool:
-		processed_reads = pool.starmap(simulate_reads_chr, list_args)
+		min_seq_len = (
+			cpg_overlaps.loc[last_idx, "start"] - cpg_overlaps.loc[first_idx, "start"] + 1
+		)
 
-	# Merge simulated reads 
-	processed_reads = [p for p in processed_reads if p is not None]
+		for _ in range(read["n_reads"]):
+			if min_seq_len <= 150 and "." not in methyl_pattern:
+				# Short single-end read — no splitting needed regardless of flags
+				res = single_read_simulation(read, first_idx, last_idx, methyl_pattern)
+				if res is not None:
+					df_res.append(res)
+			else:
+				missing_idces = [m.start() for m in re.finditer(r"\.", methyl_pattern)]
+				# Paired-end: all dots form one consecutive block
+				is_paired = bool(missing_idces) and all(
+					b - a == 1
+					for a, b in zip(missing_idces, missing_idces[1:])
+				)
+
+				if is_paired:
+					if split_paired_end_reads:
+						gap_start = missing_idces[0]
+						gap_end   = missing_idces[-1]
+						res = single_read_simulation(
+							read, first_idx, first_idx + gap_start - 1,
+							methyl_pattern[:gap_start],
+						)
+						if res is not None:
+							df_res.append(res)
+						res = single_read_simulation(
+							read, first_idx + gap_end + 1, last_idx,
+							methyl_pattern[gap_end + 1:],
+						)
+						if res is not None:
+							df_res.append(res)
+					else:
+						res = paired_end_as_single(
+							read, first_idx, last_idx, methyl_pattern, missing_idces
+						)
+						if res is not None:
+							df_res.append(res)
+				else:
+					# Long read (no dot gap or non-consecutive dots)
+					if split_long_reads:
+						half = len(methyl_pattern) // 2
+						res = single_read_simulation(
+							read, first_idx, first_idx + half - 1, methyl_pattern[:half]
+						)
+						if res is not None:
+							df_res.append(res)
+						res = single_read_simulation(
+							read, first_idx + half, last_idx, methyl_pattern[half:]
+						)
+						if res is not None:
+							df_res.append(res)
+					else:
+						res = single_read_simulation(
+							read, first_idx, last_idx, methyl_pattern
+						)
+						if res is not None:
+							df_res.append(res)
+
+	return pd.concat(df_res) if df_res else None
+
+
+def simulate_reads(df_reads: pd.DataFrame,
+				   cpg_overlaps: pd.DataFrame,
+				   wgbstools_ref_dir: str,
+				   genome: str = "hg19",
+				   n_cores: int = 10,
+				   split_paired_end_reads: bool = True,
+				   split_long_reads: bool = True) -> pd.DataFrame:
+
+	df_reads = df_reads.copy()
+	df_reads["nCG"] = df_reads["methyl"].str.len()
+
+	# Build one row per atlas region with its CpG-index boundaries
+	region_bounds = _build_region_bounds(cpg_overlaps)
+
+	# Load reference genome
+	f_genome = get_reference_file(
+		genome=genome, file_type="genome", wgbstools_ref_dir=wgbstools_ref_dir
+	)
+	with open(f_genome, "rb") as fp:
+		dict_ref = pkl.load(fp)
+
+	# Per-chromosome: assign atlas regions via any-overlap, then queue for simulation.
+	# chrX and chrY are included to match UXM's chromosome coverage.
+	list_args = []
+	chroms = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
+	for chrom in chroms:
+		sub_reads = df_reads[df_reads["chr"] == chrom]
+		sub_cpgs  = cpg_overlaps[cpg_overlaps["chr"] == chrom]
+		sub_regs  = region_bounds[region_bounds["chr"] == chrom]
+
+		if sub_reads.empty or sub_cpgs.empty:
+			print(chrom, sub_reads.shape, sub_cpgs.shape)
+			continue
+
+		# Overlap join: assigns region info and cpgs_in_region to each read
+		sub_reads = _assign_atlas_regions_chr(sub_reads, sub_regs)
+		if sub_reads.empty:
+			continue
+
+		if chrom not in dict_ref:
+			print(f"Reference genome missing for {chrom}, skipping")
+			continue
+
+		list_args.append((sub_reads, sub_cpgs, dict_ref[chrom], chrom, 3,
+						  split_paired_end_reads, split_long_reads))
+
 	del dict_ref
 	gc.collect()
 
-	processed_reads = pd.concat(processed_reads).reset_index(drop=True)
-	
-	return processed_reads
+	with mp.Pool(n_cores) as pool:
+		processed_reads = pool.starmap(simulate_reads_chr, list_args)
+
+	processed_reads = [p for p in processed_reads if p is not None]
+	if not processed_reads:
+		return pd.DataFrame()
+	return pd.concat(processed_reads).reset_index(drop=True)

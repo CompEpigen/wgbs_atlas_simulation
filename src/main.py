@@ -21,6 +21,15 @@ def arg_parser():
 	parser.add_argument("-f", "--f_input", required=True, help="Text file containing a list of .pat files OR path to a .pat file")
 	parser.add_argument("-wd", "--wgbstools_dir", help="The directory where wgbstools is installed. Only needed to be provided once per genome.")
 	parser.add_argument("-ov", "--overwrite_processed_files", action=argparse.BooleanOptionalAction, help="Force overwrite of already processed files.")
+	parser.add_argument("-pa", "--parse_all", action=argparse.BooleanOptionalAction, help="Parse all files and all regions from atlas regardless of the target cell type")
+	parser.add_argument("-ex", "--exclude_cells_types", nargs='+', help="Exclude regions related to the cell-types from the list")
+	parser.add_argument("--split_paired_end_reads", action=argparse.BooleanOptionalAction, default=True,
+						help="Split paired-end reads at the dot gap into two separate reads. "
+							 "When disabled (--no-split_paired_end_reads), the read is kept as one unit "
+							 "and the unsequenced gap is filled with N in the output sequence. (default: True)")
+	parser.add_argument("--split_long_reads", action=argparse.BooleanOptionalAction, default=True,
+						help="Split reads whose CpG span exceeds 150 bp at the midpoint into two reads. "
+							 "When disabled (--no-split_long_reads), the read is kept as one unit. (default: True)")
 
 	return parser.parse_args()
 
@@ -84,7 +93,7 @@ def filename2ctype(f_name: str) -> str:
 	'''
 
 	f_name = os.path.basename(f_name)
-	f_name_short = "_".join(f_name.split("_")[1:]).split(".hg38")[0]
+	f_name_short = "_".join(f_name.split("_")[1:]).split(".hg38")[0].replace(".pat.gz", "")
 	try:
 		return df_ctype_match[f_name_short]
 	except KeyError:
@@ -131,9 +140,11 @@ if __name__=="__main__":
 		df_region.rename(columns={"Type":"ctype"}, inplace=True)
 	else:
 		ValueError("Either 'target' or 'Type' column must be provided in the reference regions")
-
-	unique_ctypes = df_files["cell_type"].unique()
-	df_region = df_region.loc[df_region["ctype"].apply(lambda x: x in unique_ctypes), :]
+	if not args.parse_all:
+		unique_ctypes = df_files["cell_type"].unique()
+		df_region = df_region.loc[df_region["ctype"].apply(lambda x: x in unique_ctypes), :]
+	if args.exclude_cells_types:
+		df_region = df_region.loc[df_region["ctype"].apply(lambda x: x not in args.exclude_cells_types), :]
 	df_region["dmr_id"] = list(range(df_region.shape[0]))
 	print(df_region)
 	unique_ctypes=df_region["ctype"].unique()
@@ -191,7 +202,9 @@ if __name__=="__main__":
 		df_reads = pd.read_csv(input_file, sep="\t", header=None, compression='infer')
 		df_reads.columns = ["chr", "index", "methyl", "n_reads"] 
 		# Read simulation 
-		res = simulate_reads(df_reads, cpg_overlaps, wgbstools_ref_dir=args.wgbstools_dir, genome=args.genome, n_cores=args.cores)
+		res = simulate_reads(df_reads, cpg_overlaps, wgbstools_ref_dir=args.wgbstools_dir, genome=args.genome, n_cores=args.cores,
+							 split_paired_end_reads=args.split_paired_end_reads,
+							 split_long_reads=args.split_long_reads)
 		res["ctype"] = df_files.loc[idx, "cell_type"]
 		res.to_csv(f_out, header= True, sep="\t", index=False)
 		# except:
