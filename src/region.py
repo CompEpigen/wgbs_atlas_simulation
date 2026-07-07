@@ -13,14 +13,27 @@ def find_cpg_overlaps_chr(df_regions: pd.DataFrame, df_cpgs: pd.DataFrame) -> pd
 	cpg_idx, region_idx = object_ncls.all_overlaps_both(df_cpgs["start"].values,
 														df_cpgs["end"].values,
 														df_cpgs.index.values)
-	if cpg_idx.shape[0] != len(set(list(cpg_idx))):
-		raise ValueError("Some CpGs are located in multiple regions in %s"%(df_regions["chr"][0]))
+
+	# When a CpG falls inside multiple regions, keep only its first match.
+	# This mirrors UXM's behaviour (pat_utils.py: "only the first matching region is used").
+	if cpg_idx.shape[0] != len(set(cpg_idx)):
+		chrom = df_regions["chr"].iloc[0]
+		print(f"Warning: some CpGs overlap multiple regions on {chrom}; "
+			  f"keeping first match per CpG (consistent with UXM).")
+		seen = set()
+		keep = []
+		for i, c in enumerate(cpg_idx):
+			if c not in seen:
+				seen.add(c)
+				keep.append(i)
+		cpg_idx    = cpg_idx[keep]
+		region_idx = region_idx[keep]
 
 	df_cpgs = df_cpgs.loc[list(cpg_idx),:]
-	df_cpgs["dmr_label"] = region_idx 
-	df_cpgs["dmr_ctype"] = [df_regions.loc[ii, "ctype"] for ii in region_idx] # due to duplicated index
-	df_cpgs["dmr_coordinates"] = [f"{df_regions.loc[ii, 'chr']}:{df_regions.loc[ii, 'start']}-{df_regions.loc[ii, 'end']}" 
-                                   for ii in region_idx]
+	df_cpgs["dmr_label"] = region_idx
+	df_cpgs["dmr_ctype"] = [df_regions.loc[ii, "ctype"] for ii in region_idx]
+	df_cpgs["dmr_coordinates"] = [f"{df_regions.loc[ii, 'chr']}:{df_regions.loc[ii, 'start']}-{df_regions.loc[ii, 'end']}"
+								   for ii in region_idx]
 	return df_cpgs
 
 def find_cpg_overlaps(df_region: pd.DataFrame, df_cpg: pd.DataFrame, n_cores=10) -> pd.DataFrame:
